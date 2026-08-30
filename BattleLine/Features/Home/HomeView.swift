@@ -13,8 +13,16 @@ struct HomeView: View {
         GeometryReader { proxy in
             HStack(spacing: 28) {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("BattleLine")
-                        .font(.system(.largeTitle, design: .serif, weight: .semibold))
+                    HStack(spacing: 14) {
+                        Image("BattleLineLogo")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 76, height: 76)
+                            .accessibilityHidden(true)
+
+                        Text("BattleLine")
+                            .font(.system(.largeTitle, design: .serif, weight: .semibold))
+                    }
                     Text("在附近的两台 iPhone 之间，用纯蓝牙展开九条战线的较量。")
                         .font(.title3)
                         .foregroundStyle(BattleLineTheme.mutedInk)

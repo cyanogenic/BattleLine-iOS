@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum BattleLineTheme {
-    static let background = Color(light: 0xEEE4D1, dark: 0x15130F)
+    static let background = Color("BattleLineBackground")
     static let surface = Color(light: 0xFFFAF0, dark: 0x252019)
     static let raisedSurface = Color(light: 0xF0E0C2, dark: 0x342B1E)
     static let ink = Color(light: 0x2B241A, dark: 0xF7EDD9)

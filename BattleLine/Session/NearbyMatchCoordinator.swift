@@ -78,7 +78,6 @@ final class NearbyMatchCoordinator {
         matchModel.setActionHandler { [weak self] action in
             self?.submit(action)
         }
-        restorePersistedSession()
     }
 
     var canResumeCurrentSession: Bool {
@@ -738,7 +737,7 @@ final class NearbyMatchCoordinator {
         let view = game.view(for: .playerOne)
         matchModel.update(
             from: view,
-            claimableFlagIndices: claimableFlagIndices(in: game, for: .playerOne),
+            claimableFlagIndices: Self.claimableFlagIndices(in: game, for: .playerOne),
             localName: localPlayerName,
             opponentName: opponentName
         )
@@ -752,7 +751,7 @@ final class NearbyMatchCoordinator {
         let payload = StateSnapshotPayload(
             recipientSeat: Self.seatNumber(for: .playerTwo),
             encodedPlayerView: try MatchWireCoding.encoder.encode(view),
-            claimableFlagIndices: claimableFlagIndices(in: game, for: .playerTwo)
+            claimableFlagIndices: Self.claimableFlagIndices(in: game, for: .playerTwo)
         )
         try await send(
             .carrying(
@@ -764,7 +763,7 @@ final class NearbyMatchCoordinator {
         )
     }
 
-    private func claimableFlagIndices(
+    nonisolated private static func claimableFlagIndices(
         in game: BattleLineGame,
         for player: PlayerID
     ) -> [Int] {
@@ -841,8 +840,19 @@ final class NearbyMatchCoordinator {
         }
     }
 
-    private func restorePersistedSession() {
-        guard let persisted = persistence.load() else { return }
+    /// Called during app preparation, before exposing any session controls.
+    func restorePersistedSession() async {
+        let loaded = await Task.detached(priority: .userInitiated) { [persistence] in
+            let persisted = persistence.load()
+            // Advanced claim evaluation can be expensive; keep it off the UI thread too.
+            let claimable = persisted?.game.map {
+                Self.claimableFlagIndices(in: $0, for: .playerOne)
+            } ?? []
+            return (persisted, claimable)
+        }.value
+        // A cancelled launch or a newly started session must not be overwritten.
+        guard !Task.isCancelled, role == nil, !sessionTerminated,
+              let persisted = loaded.0 else { return }
 
         switch persisted.role {
         case .host:
@@ -891,7 +901,7 @@ final class NearbyMatchCoordinator {
             let view = game.view(for: .playerOne)
             matchModel.update(
                 from: view,
-                claimableFlagIndices: claimableFlagIndices(in: game, for: .playerOne),
+                claimableFlagIndices: loaded.1,
                 localName: localPlayerName,
                 opponentName: opponentName
             )

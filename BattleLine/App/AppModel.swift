@@ -12,13 +12,21 @@ final class AppModel {
         case match
     }
 
+    private(set) var isReady = false
+    private(set) var hasFinishedLaunchAnimation = false
+
+    var isShowingLaunch: Bool {
+        !isReady || !hasFinishedLaunchAnimation
+    }
+    @ObservationIgnored private var startupTask: Task<Void, Never>?
+
     var screen: Screen = .home
     var setup = MatchSetupDraft()
     var joiningPlayerName = "加入者"
     let match: MatchViewModel
     let nearby: NearbyMatchCoordinator
 
-    init() {
+    init(persistence: NearbyMatchPersistence = NearbyMatchPersistence()) {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         let showsClaimPreview = arguments.contains("--preview-claim")
@@ -35,15 +43,42 @@ final class AppModel {
         let match = MatchViewModel()
         #endif
         self.match = match
-        nearby = NearbyMatchCoordinator(matchModel: match)
+        nearby = NearbyMatchCoordinator(matchModel: match, persistence: persistence)
         nearby.onMatchReady = { [weak self] in
             self?.screen = .match
         }
         #if DEBUG
         if showsMatchPreview {
+            isReady = true
+            hasFinishedLaunchAnimation = true
             screen = .match
         }
         #endif
+    }
+
+    /// Shared across view task restarts; restoring once prevents an old save from
+    /// replacing a session the player has already resumed or abandoned.
+    func prepareForLaunch() async {
+        guard !isReady else { return }
+        if startupTask == nil {
+            startupTask = Task { [nearby] in
+                #if DEBUG
+                // Exercise the loading UI without slowing down normal launches.
+                if ProcessInfo.processInfo.arguments.contains("--preview-launch") {
+                    try? await Task.sleep(for: .seconds(6))
+                }
+                #endif
+                await nearby.restorePersistedSession()
+            }
+        }
+        await startupTask?.value
+        guard !Task.isCancelled else { return }
+        isReady = true
+        startupTask = nil
+    }
+
+    func finishLaunchAnimation() {
+        hasFinishedLaunchAnimation = true
     }
 
     var hasResumableSession: Bool {

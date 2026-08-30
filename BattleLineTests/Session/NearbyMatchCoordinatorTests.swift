@@ -169,6 +169,60 @@ struct NearbyMatchCoordinatorTests {
         )
     }
 
+    @Test("Reconnect restores both match phases after either or both players leave",
+          arguments: ["host", "guest", "both"])
+    func reconnectRestoresMatchPhases(leaving: String) async throws {
+        let harness = makeHarness()
+        defer { harness.stop() }
+
+        harness.host.startHosting(
+            setup: MatchSetupDraft(playerName: "房主", advancedClaiming: false)
+        )
+        harness.guest.startJoining(playerName: "加入者")
+        try await waitUntil("guest discovers the room") {
+            harness.guest.stage == .roomFound
+        }
+        harness.guest.requestToJoinDiscoveredRoom()
+        try await waitUntil("host can approve the guest") {
+            harness.host.stage == .awaitingHostApproval
+        }
+        harness.host.approvePendingGuest()
+        try await waitUntil("both peers enter the match") {
+            harness.host.stage == .active && harness.guest.stage == .active
+        }
+
+        let hostPhase = harness.hostModel.phase
+        let guestPhase = harness.guestModel.phase
+        let hostHand = harness.hostModel.hand
+        let guestHand = harness.guestModel.hand
+        let version = harness.hostModel.stateVersion
+        let snapshotsBefore = harness.link.envelopes(sentBy: .host, kind: .stateSnapshot).count
+
+        if leaving != "guest" { harness.host.pauseAndReturnHome() }
+        if leaving != "host" { harness.guest.pauseAndReturnHome() }
+        try await waitUntil("both peers pause after disconnection") {
+            if case .paused = harness.hostModel.phase,
+               case .paused = harness.guestModel.phase { return true }
+            return false
+        }
+
+        if leaving != "guest" { harness.host.resumeCurrentSession() }
+        if leaving != "host" { harness.guest.resumeCurrentSession() }
+        try await waitUntil("the resume handshake and snapshot complete") {
+            harness.host.stage == .active && harness.guest.stage == .active
+                && harness.link.envelopes(sentBy: .host, kind: .stateSnapshot).count > snapshotsBefore
+        }
+
+        #expect(harness.hostModel.phase == hostPhase)
+        #expect(harness.guestModel.phase == guestPhase)
+        #expect(harness.hostModel.connectionText == "纯蓝牙已连接")
+        #expect(harness.guestModel.connectionText == "纯蓝牙已连接")
+        #expect(harness.hostModel.hand == hostHand)
+        #expect(harness.guestModel.hand == guestHand)
+        #expect(harness.hostModel.stateVersion == version)
+        #expect(harness.guestModel.stateVersion == version)
+    }
+
     private func makeHarness() -> NearbyMatchHarness {
         let link = FakeNearbyLink()
         let hostModel = MatchViewModel()
@@ -272,8 +326,19 @@ private final class FakeNearbyLink {
     }
 
     func stop(_ transport: FakeNearbyTransport) {
+        guard transport.isStarted else { return }
         transport.setStarted(false)
         transport.emit(.stateChanged(.stopped))
+        switch transport.role {
+        case .host:
+            if let guest, guest.isStarted {
+                guest.emit(.stateChanged(.scanning))
+            }
+        case .join:
+            if let host, host.isStarted {
+                host.emit(.stateChanged(.advertising))
+            }
+        }
     }
 
     func send(_ payload: Data, from sender: FakeNearbyTransport) throws {

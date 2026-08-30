@@ -522,7 +522,7 @@ final class NearbyMatchCoordinator {
                 return
             }
             stage = .active
-            matchModel.markConnected()
+            presentHostView()
             onMatchReady?()
             Task { [weak self] in
                 do {

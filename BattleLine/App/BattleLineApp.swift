@@ -22,8 +22,18 @@ private struct AppRootView: View {
                 .ignoresSafeArea()
 
             if !model.isShowingLaunch {
-                screenContent
-                    .transition(.opacity)
+                Group {
+                    if model.needsNickname {
+                        NicknameEditorView(
+                            isFirstLaunch: true,
+                            initialNickname: "",
+                            save: model.profile.saveNickname
+                        )
+                    } else {
+                        screenContent
+                    }
+                }
+                .transition(.opacity)
             } else {
                 LaunchLoadingView(onAnimationFinished: model.finishLaunchAnimation)
                     .transition(.opacity)
@@ -43,7 +53,25 @@ private struct AppRootView: View {
                 joinMatch: model.showJoinLobby,
                 hasResumableMatch: model.hasResumableSession,
                 continueMatch: model.continueMatch,
-                abandonMatch: model.abandonMatch
+                abandonMatch: model.abandonMatch,
+                openSettings: model.showSettings
+            )
+        case .settings:
+            SettingsView(
+                nickname: model.profile.nickname,
+                back: model.showHome,
+                showPersonalInfo: model.showPersonalInfo
+            )
+        case .personalInfo:
+            NicknameEditorView(
+                isFirstLaunch: false,
+                initialNickname: model.profile.nickname,
+                cancel: model.showSettings,
+                save: { nickname in
+                    guard model.profile.saveNickname(nickname) else { return false }
+                    model.showSettings()
+                    return true
+                }
             )
         case .hostSetup:
             HostSetupView(

@@ -25,10 +25,11 @@ struct HostSetupView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 18) {
-                TextField("你的名称", text: $setup.playerName)
-                    .textFieldStyle(.roundedBorder)
-                    .textInputAutocapitalization(.never)
-                    .submitLabel(.done)
+                LabeledContent("昵称") {
+                    Text(setup.playerName)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                }
 
                 Toggle(isOn: $setup.advancedClaiming) {
                     VStack(alignment: .leading, spacing: 4) {

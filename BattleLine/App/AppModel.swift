@@ -6,6 +6,8 @@ import Observation
 final class AppModel {
     enum Screen: Hashable {
         case home
+        case settings
+        case personalInfo
         case hostSetup
         case hostLobby
         case joinLobby
@@ -22,11 +24,23 @@ final class AppModel {
 
     var screen: Screen = .home
     var setup = MatchSetupDraft()
-    var joiningPlayerName = "加入者"
+    let profile: PlayerProfile
+    @ObservationIgnored private var bypassesNicknameSetup = false
+
+    var needsNickname: Bool {
+        profile.nickname.isEmpty && !bypassesNicknameSetup
+    }
     let match: MatchViewModel
     let nearby: NearbyMatchCoordinator
 
-    init(persistence: NearbyMatchPersistence = NearbyMatchPersistence()) {
+    init(
+        persistence: NearbyMatchPersistence = NearbyMatchPersistence(),
+        profile: PlayerProfile = PlayerProfile(),
+        transportFactory: @escaping NearbyMatchCoordinator.TransportFactory = {
+            BLENearbyTransport(role: $0)
+        }
+    ) {
+        self.profile = profile
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         let showsClaimPreview = arguments.contains("--preview-claim")
@@ -43,12 +57,15 @@ final class AppModel {
         let match = MatchViewModel()
         #endif
         self.match = match
-        nearby = NearbyMatchCoordinator(matchModel: match, persistence: persistence)
+        nearby = NearbyMatchCoordinator(
+            matchModel: match, transportFactory: transportFactory, persistence: persistence
+        )
         nearby.onMatchReady = { [weak self] in
             self?.screen = .match
         }
         #if DEBUG
         if showsMatchPreview {
+            bypassesNicknameSetup = true
             isReady = true
             hasFinishedLaunchAnimation = true
             screen = .match
@@ -95,24 +112,36 @@ final class AppModel {
         screen = .home
     }
 
+    func showSettings() {
+        guard !needsNickname else { return }
+        screen = .settings
+    }
+
+    func showPersonalInfo() {
+        screen = .personalInfo
+    }
+
     func showHostSetup() {
-        guard !hasResumableSession else { return }
-        setup = MatchSetupDraft()
+        guard !needsNickname, !hasResumableSession else { return }
+        setup = MatchSetupDraft(playerName: profile.nickname)
         screen = .hostSetup
     }
 
     func showJoinLobby() {
-        guard !hasResumableSession else { return }
-        nearby.startJoining(playerName: joiningPlayerName)
+        guard !needsNickname, !hasResumableSession else { return }
+        nearby.startJoining(playerName: profile.nickname)
         screen = .joinLobby
     }
 
     func createNearbyMatch() {
+        guard !needsNickname, !hasResumableSession else { return }
+        setup.playerName = profile.nickname
         nearby.startHosting(setup: setup)
         screen = .hostLobby
     }
 
     func continueMatch() {
+        guard !needsNickname else { return }
         guard nearby.resumeCurrentSession() != nil else { return }
         screen = .match
     }

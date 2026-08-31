@@ -6,6 +6,7 @@ struct HomeView: View {
     let hasResumableMatch: Bool
     let continueMatch: () -> Void
     let abandonMatch: () -> Void
+    let openSettings: () -> Void
 
     @State private var confirmingAbandonment = false
 
@@ -69,6 +70,21 @@ struct HomeView: View {
             }
             .padding(32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack {
+                Spacer()
+                Button(action: openSettings) {
+                    Label("设置", systemImage: "gearshape")
+                        .font(.headline)
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 44)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(BattleLineTheme.ink)
+                .accessibilityIdentifier("home.settings")
+            }
+            .padding(.horizontal, 18)
         }
         .confirmationDialog(
             "结束当前对局？",

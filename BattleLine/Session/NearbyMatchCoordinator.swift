@@ -111,12 +111,6 @@ final class NearbyMatchCoordinator {
         startTransport(role: .join)
     }
 
-    func updateJoiningPlayerName(_ name: String) {
-        guard role == .guest, stage != .active else { return }
-        localPlayerName = name
-        matchModel.localPlayerName = name
-    }
-
     func requestToJoinDiscoveredRoom() {
         guard role == .guest,
               stage == .roomFound,

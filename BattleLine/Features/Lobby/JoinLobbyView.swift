@@ -28,11 +28,11 @@ struct JoinLobbyView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 14) {
-                TextField("你的名称", text: $coordinator.localPlayerName)
-                    .textFieldStyle(.roundedBorder)
-                    .textInputAutocapitalization(.never)
-                    .submitLabel(.done)
-                    .disabled(isJoinRequestSent)
+                LabeledContent("昵称") {
+                    Text(coordinator.localPlayerName)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                }
 
                 Divider()
 
@@ -179,12 +179,5 @@ struct JoinLobbyView: View {
             .font(.title3.monospacedDigit().weight(.bold))
             .tracking(1.2)
             .foregroundStyle(BattleLineTheme.gold)
-    }
-
-    private var isJoinRequestSent: Bool {
-        coordinator.stage == .awaitingHostDecision
-            || coordinator.stage == .awaitingSnapshot
-            || coordinator.stage == .reconnecting
-            || coordinator.stage == .active
     }
 }

@@ -16,9 +16,12 @@ struct MatchView: View {
                 .frame(maxWidth: .infinity)
 
                 MatchCommandView(model: model, leaveMatch: leaveMatch)
-                    .frame(width: 208)
+                    .frame(width: 180)
             }
-            .padding(9)
+            .padding(.leading, 9)
+            .padding(.trailing, 16)
+            .padding(.vertical, 9)
+            .ignoresSafeArea(.container, edges: .trailing)
         }
     }
 

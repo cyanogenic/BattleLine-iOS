@@ -179,7 +179,6 @@ private struct FlagLineView: View {
         Button(action: select) {
             VStack(spacing: 4) {
                 FormationView(cards: line.opponentCards)
-                    .rotationEffect(.degrees(180))
 
                 HStack(spacing: 5) {
                     Text((line.id + 1).formatted())

@@ -3,6 +3,8 @@ import SwiftUI
 struct MatchView: View {
     @Bindable var model: MatchViewModel
     let leaveMatch: () -> Void
+    @State private var leadingEdgeVisible = true
+    @State private var trailingEdgeVisible = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,49 +28,87 @@ struct MatchView: View {
     }
 
     private var battlefield: some View {
-        HStack(spacing: 6) {
-            Button {
-                model.moveWindow(-3)
-            } label: {
-                Image(systemName: "chevron.left")
-                    .frame(width: 40)
-                    .frame(maxHeight: .infinity)
-            }
-            .buttonStyle(BattleWindowButtonStyle())
-            .disabled(!model.canMoveLeft)
-            .accessibilityLabel("显示左侧三条战线")
+        GeometryReader { geometry in
+            let spacing: CGFloat = 7
+            // Four slots leave at least three complete lines visible between the edges.
+            let lineWidth = (geometry.size.width - spacing * 3) / 4
 
-            HStack(spacing: 7) {
-                ForEach(model.visibleLines) { line in
-                    FlagLineView(
-                        line: line,
-                        selectedForPlay: model.selectedLineID == line.id,
-                        selectedForClaim: model.selectedClaimIDs.contains(line.id),
-                        interactive: isLineInteractive(line),
-                        select: {
-                            if model.phase == .claiming {
-                                model.toggleClaim(line)
-                            } else {
-                                model.selectLine(line)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: spacing) {
+                    ForEach(model.lines) { line in
+                        FlagLineView(
+                            line: line,
+                            selectedForPlay: model.selectedLineID == line.id,
+                            selectedForClaim: model.selectedClaimIDs.contains(line.id),
+                            interactive: isLineInteractive(line),
+                            select: {
+                                if model.phase == .claiming {
+                                    model.toggleClaim(line)
+                                } else {
+                                    model.selectLine(line)
+                                }
                             }
-                        }
-                    )
+                        )
+                        .frame(width: lineWidth, height: geometry.size.height)
+                        .id(line.id)
+                    }
                 }
             }
-            .frame(maxWidth: .infinity)
-
-            Button {
-                model.moveWindow(3)
-            } label: {
-                Image(systemName: "chevron.right")
-                    .frame(width: 40)
-                    .frame(maxHeight: .infinity)
+            // Scrolling changes edge decoration only; selected targets stay selected.
+            .onScrollGeometryChange(for: [Bool].self) { scroll in
+                [
+                    scroll.contentOffset.x > 1,
+                    scroll.contentOffset.x + scroll.containerSize.width < scroll.contentSize.width - 1,
+                ]
+            } action: { _, edges in
+                leadingEdgeVisible = edges[0]
+                trailingEdgeVisible = edges[1]
             }
-            .buttonStyle(BattleWindowButtonStyle())
-            .disabled(!model.canMoveRight)
-            .accessibilityLabel("显示右侧三条战线")
+            .overlay(alignment: .leading) {
+                battlefieldEdge(leading: true)
+                    .opacity(leadingEdgeVisible ? 1 : 0)
+            }
+            .overlay(alignment: .trailing) {
+                battlefieldEdge(leading: false)
+                    .opacity(trailingEdgeVisible ? 1 : 0)
+            }
+            .defaultScrollAnchor(.center, for: .initialOffset)
         }
         .frame(maxHeight: .infinity)
+    }
+
+    private func battlefieldEdge(leading: Bool) -> some View {
+        let outer: UnitPoint = leading ? .leading : .trailing
+        let inner: UnitPoint = leading ? .trailing : .leading
+
+        return ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .mask {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0),
+                            .init(color: .black.opacity(0.75), location: 0.35),
+                            .init(color: .clear, location: 1),
+                        ],
+                        startPoint: outer,
+                        endPoint: inner
+                    )
+                }
+            LinearGradient(
+                stops: [
+                    .init(color: BattleLineTheme.background, location: 0),
+                    .init(color: BattleLineTheme.background.opacity(0.72), location: 0.25),
+                    .init(color: BattleLineTheme.background.opacity(0.12), location: 0.7),
+                    .init(color: .clear, location: 1),
+                ],
+                startPoint: outer,
+                endPoint: inner
+            )
+        }
+        .frame(width: 48)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private func isLineInteractive(_ line: BattleLinePresentation) -> Bool {
@@ -480,16 +520,5 @@ private struct MatchCommandView: View {
         case .playCard, .claiming:
             ""
         }
-    }
-}
-
-private struct BattleWindowButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(BattleLineTheme.ink.opacity(configuration.isPressed ? 0.6 : 1))
-            .background(
-                BattleLineTheme.raisedSurface,
-                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-            )
     }
 }

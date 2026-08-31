@@ -34,7 +34,6 @@ final class MatchViewModel {
     var lines: [BattleLinePresentation] = MatchViewModel.emptyLines
     var hand: [TroopCardPresentation] = []
     var phase: MatchPhasePresentation = .waitingForOpponent
-    var visibleStart = 3
     var selectedCardID: String?
     var selectedLineID: Int?
     /// Selection order is preserved because a winning claim ends the match
@@ -50,18 +49,9 @@ final class MatchViewModel {
     @ObservationIgnored
     private var actionHandler: ((GameAction) -> Void)?
 
-    var visibleLines: ArraySlice<BattleLinePresentation> {
-        let lower = min(max(visibleStart, 0), max(lines.count - 3, 0))
-        let upper = min(lower + 3, lines.count)
-        return lines[lower ..< upper]
-    }
-
     var selectedCard: TroopCardPresentation? {
         hand.first { $0.id == selectedCardID }
     }
-
-    var canMoveLeft: Bool { visibleStart > 0 }
-    var canMoveRight: Bool { visibleStart < max(lines.count - 3, 0) }
 
     var claimableLines: [BattleLinePresentation] {
         lines.filter(\.isClaimable)
@@ -178,14 +168,6 @@ final class MatchViewModel {
         isSubmitting = false
     }
 
-    func moveWindow(_ offset: Int) {
-        visibleStart = min(max(visibleStart + offset, 0), max(lines.count - 3, 0))
-        if let selectedLineID,
-           !(visibleStart ..< min(visibleStart + 3, lines.count)).contains(selectedLineID) {
-            self.selectedLineID = nil
-        }
-    }
-
     func selectCard(_ card: TroopCardPresentation) {
         guard phase == .playCard, !isSubmitting else { return }
         selectedCardID = selectedCardID == card.id ? nil : card.id
@@ -241,7 +223,6 @@ final class MatchViewModel {
     private func resetBoard() {
         lines = Self.emptyLines
         hand = []
-        visibleStart = 3
         selectedCardID = nil
         selectedLineID = nil
         selectedClaimIDs = []

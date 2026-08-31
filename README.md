@@ -14,8 +14,9 @@ troop-card game described in `battle-line-rulebook-v2.pdf`.
   rule, selected before the match starts.
 - Host-authoritative state validation. A joining device receives only its
   player view and never the opponent's hand or the deck order.
-- Landscape battle screen based on layout D: three visible lines, a one-row
-  hand, and a fixed command area.
+- Landscape battle screen with nine continuously scrolling lines, at least
+  three fully visible lines, softened scroll edges, a one-row hand, and a fixed
+  command area. Scrolling preserves the selected play target.
 
 Version 1 does not include tactics cards, AI, internet play, accounts, cloud
 services, or background Bluetooth discovery.

@@ -14,6 +14,7 @@ struct BattleLineApp: App {
 
 private struct AppRootView: View {
     @Bindable var model: AppModel
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -42,6 +43,9 @@ private struct AppRootView: View {
         .animation(.easeOut(duration: 0.2), value: model.isShowingLaunch)
         .animation(reduceMotion ? nil : .snappy(duration: 0.28), value: model.screen)
         .task { await model.prepareForLaunch() }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            model.setAppActive(phase == .active)
+        }
     }
 
     @ViewBuilder
@@ -59,8 +63,10 @@ private struct AppRootView: View {
         case .settings:
             SettingsView(
                 nickname: model.profile.nickname,
+                feedbackSettings: model.feedbackSettings,
                 back: model.showHome,
-                showPersonalInfo: model.showPersonalInfo
+                showPersonalInfo: model.showPersonalInfo,
+                setHapticsEnabled: model.setHapticsEnabled
             )
         case .personalInfo:
             NicknameEditorView(

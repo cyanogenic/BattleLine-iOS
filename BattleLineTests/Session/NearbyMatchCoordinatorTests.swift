@@ -169,28 +169,104 @@ struct NearbyMatchCoordinatorTests {
         )
     }
 
-    @Test("Reconnect restores both match phases after either or both players leave",
-          arguments: ["host", "guest", "both"])
-    func reconnectRestoresMatchPhases(leaving: String) async throws {
+    @Test("Each peer is reminded once when an opponent completes a full turn",
+          arguments: [false, true])
+    func localTurnRemindersFollowCompletedTurns(advancedClaiming: Bool) async throws {
         let harness = makeHarness()
         defer { harness.stop() }
+        try await startMatch(in: harness, advancedClaiming: advancedClaiming)
 
-        harness.host.startHosting(
-            setup: MatchSetupDraft(playerName: "房主", advancedClaiming: false)
+        #expect(harness.reminders.hostCount == 0)
+        #expect(harness.reminders.guestCount == 0)
+
+        // Two turns cover both recipient roles regardless of the random first player.
+        try await completeTurn(in: harness)
+        try await completeTurn(in: harness)
+        #expect(harness.reminders.hostCount == 1)
+        #expect(harness.reminders.guestCount == 1)
+
+        let guestCommand = try #require(
+            harness.link.envelopes(sentBy: .join, kind: .actionCommand).last
         )
-        harness.guest.startJoining(playerName: "加入者")
-        try await waitUntil("guest discovers the room") {
-            harness.guest.stage == .roomFound
+        let snapshotsBeforeReplay = harness.link.envelopes(
+            sentBy: .host, kind: .stateSnapshot
+        ).count
+        try harness.link.replay(guestCommand, from: .join)
+        try await waitUntil("the duplicate command returns the current snapshot") {
+            harness.link.envelopes(sentBy: .host, kind: .stateSnapshot).count
+                > snapshotsBeforeReplay
         }
-        harness.guest.requestToJoinDiscoveredRoom()
-        try await waitUntil("host can approve the guest") {
-            harness.host.stage == .awaitingHostApproval
+        try await waitForDelivery(from: .host, in: harness)
+        #expect(harness.reminders.hostCount == 1)
+        #expect(harness.reminders.guestCount == 1)
+
+        let snapshots = harness.link.envelopes(sentBy: .host, kind: .stateSnapshot)
+        let initialSnapshot = try #require(snapshots.first)
+        let currentSnapshot = try #require(snapshots.last)
+        let currentVersion = harness.guestModel.stateVersion
+        try harness.link.replay(currentSnapshot, from: .host)
+        try harness.link.replay(initialSnapshot, from: .host)
+        try harness.link.replay(currentSnapshot, from: .host)
+        try await waitForDelivery(from: .host, in: harness)
+
+        #expect(harness.guestModel.stateVersion == currentVersion)
+        #expect(harness.reminders.hostCount == 1)
+        #expect(harness.reminders.guestCount == 1)
+    }
+
+    @Test("A turn-ending message delivered after resignation does not remind either peer",
+          arguments: ["host", "guest"])
+    func resignationSuppressesDelayedTurnReminders(resigning: String) async throws {
+        let harness = makeHarness()
+        defer { harness.stop() }
+        try await startMatch(in: harness)
+
+        let resigningCoordinator = resigning == "host" ? harness.host : harness.guest
+        let resigningModel = resigning == "host" ? harness.hostModel : harness.guestModel
+        let opponentModel = resigning == "host" ? harness.guestModel : harness.hostModel
+        if resigningModel.phase == .playCard {
+            try await completeTurn(in: harness)
         }
-        harness.host.approvePendingGuest()
-        try await waitUntil("both peers enter the match") {
-            harness.host.stage == .active && harness.guest.stage == .active
+        #expect(opponentModel.phase == .playCard)
+        try await playCard(using: opponentModel, in: harness)
+        #expect(opponentModel.phase == .claiming)
+
+        let hostCount = harness.reminders.hostCount
+        let guestCount = harness.reminders.guestCount
+        harness.link.heldKind = resigning == "host" ? .actionCommand : .stateSnapshot
+        opponentModel.confirmClaims()
+        try await waitUntil("the opponent's turn-ending message is held in transit") {
+            harness.link.heldTransmissions.count == 1
         }
 
+        resigningCoordinator.resignCurrentMatch()
+        try await waitUntil("both peers observe the resignation") {
+            resigningModel.phase == .finished(winner: .opponent)
+                && opponentModel.phase == .finished(winner: .player)
+        }
+        try harness.link.deliverHeldTransmissions()
+        try await waitForDelivery(
+            from: resigning == "host" ? .join : .host,
+            in: harness
+        )
+        try await waitForDelivery(from: .host, in: harness)
+
+        #expect(harness.reminders.hostCount == hostCount)
+        #expect(harness.reminders.guestCount == guestCount)
+    }
+
+    @Test("Reconnect restores match phases without replaying reminders",
+          arguments: ["host", "guest", "both"], [false, true])
+    func reconnectRestoresMatchPhases(leaving: String, advancedClaiming: Bool) async throws {
+        let harness = makeHarness()
+        defer { harness.stop() }
+        try await startMatch(in: harness, advancedClaiming: advancedClaiming)
+
+        // Reconnect from an established match after both peers have been reminded.
+        try await completeTurn(in: harness)
+        try await completeTurn(in: harness)
+        let hostReminderCount = harness.reminders.hostCount
+        let guestReminderCount = harness.reminders.guestCount
         let hostPhase = harness.hostModel.phase
         let guestPhase = harness.guestModel.phase
         let hostHand = harness.hostModel.hand
@@ -221,6 +297,113 @@ struct NearbyMatchCoordinatorTests {
         #expect(harness.guestModel.hand == guestHand)
         #expect(harness.hostModel.stateVersion == version)
         #expect(harness.guestModel.stateVersion == version)
+        #expect(harness.reminders.hostCount == hostReminderCount)
+        #expect(harness.reminders.guestCount == guestReminderCount)
+
+        // The next live turn still reminds its recipient after reconnecting.
+        try await completeTurn(in: harness)
+    }
+
+    private func startMatch(
+        in harness: NearbyMatchHarness,
+        advancedClaiming: Bool = false
+    ) async throws {
+        harness.host.startHosting(
+            setup: MatchSetupDraft(playerName: "房主", advancedClaiming: advancedClaiming)
+        )
+        harness.guest.startJoining(playerName: "加入者")
+        try await waitUntil("guest discovers the room") {
+            harness.guest.stage == .roomFound
+        }
+        harness.guest.requestToJoinDiscoveredRoom()
+        try await waitUntil("host can approve the guest") {
+            harness.host.stage == .awaitingHostApproval
+        }
+        harness.host.approvePendingGuest()
+        try await waitUntil("both peers enter the match") {
+            harness.host.stage == .active && harness.guest.stage == .active
+                && harness.hostModel.hand.count == 7
+                && harness.guestModel.hand.count == 7
+        }
+    }
+
+    private func completeTurn(in harness: NearbyMatchHarness) async throws {
+        let activeModel = harness.hostModel.phase == .waitingForOpponentTurn
+            ? harness.guestModel : harness.hostModel
+        let observingModel = activeModel === harness.hostModel
+            ? harness.guestModel : harness.hostModel
+        try #require(activeModel.phase == .playCard || activeModel.phase == .claiming)
+        #expect(observingModel.phase == .waitingForOpponentTurn)
+        let previousTurn = activeModel.turn
+        let previousHostCount = harness.reminders.hostCount
+        let previousGuestCount = harness.reminders.guestCount
+
+        if activeModel.phase == .claiming {
+            // Advanced claiming occurs at the start of the active player's turn.
+            try await applyAndSynchronize(in: harness) { activeModel.confirmClaims() }
+            #expect(activeModel.phase == .playCard)
+            #expect(activeModel.turn == previousTurn)
+            #expect(harness.reminders.hostCount == previousHostCount)
+            #expect(harness.reminders.guestCount == previousGuestCount)
+        }
+
+        try await playCard(using: activeModel, in: harness)
+        if activeModel.phase == .claiming {
+            // A standard-rule play is incomplete until the claim window closes.
+            #expect(observingModel.phase == .waitingForOpponentTurn)
+            #expect(activeModel.turn == previousTurn)
+            #expect(harness.reminders.hostCount == previousHostCount)
+            #expect(harness.reminders.guestCount == previousGuestCount)
+            try await applyAndSynchronize(in: harness) { activeModel.confirmClaims() }
+        }
+
+        #expect(activeModel.phase == .waitingForOpponentTurn)
+        #expect(observingModel.phase == .playCard || observingModel.phase == .claiming)
+        #expect(activeModel.turn == previousTurn + 1)
+        #expect(observingModel.turn == previousTurn + 1)
+        #expect(harness.reminders.hostCount == previousHostCount
+            + (observingModel === harness.hostModel ? 1 : 0))
+        #expect(harness.reminders.guestCount == previousGuestCount
+            + (observingModel === harness.guestModel ? 1 : 0))
+    }
+
+    private func playCard(
+        using model: MatchViewModel,
+        in harness: NearbyMatchHarness
+    ) async throws {
+        let card = try #require(model.hand.first)
+        let line = try #require(model.lines.first { $0.owner == nil && $0.playerCards.count < 3 })
+        model.selectCard(card)
+        model.selectLine(line)
+        try await applyAndSynchronize(in: harness) { model.confirmPlay() }
+    }
+
+    private func applyAndSynchronize(
+        in harness: NearbyMatchHarness,
+        action: () -> Void
+    ) async throws {
+        let nextVersion = harness.hostModel.stateVersion + 1
+        action()
+        try await waitUntil("the next authoritative state reaches both peers") {
+            harness.hostModel.stateVersion == nextVersion
+                && harness.guestModel.stateVersion == nextVersion
+        }
+    }
+
+    private func waitForDelivery(
+        from sender: BLENearbyRole,
+        in harness: NearbyMatchHarness
+    ) async throws {
+        let matchID = try #require(
+            harness.link.envelopes(sentBy: .host, kind: .hostHello).first?.matchID
+        )
+        let responder: BLENearbyRole = sender == .host ? .join : .host
+        let previousPongCount = harness.link.envelopes(sentBy: responder, kind: .pong).count
+        // AsyncStream preserves event order, so the pong acknowledges earlier messages.
+        try harness.link.replay(MatchWireEnvelope(kind: .ping, matchID: matchID), from: sender)
+        try await waitUntil("the recipient processes all messages before the ping") {
+            harness.link.envelopes(sentBy: responder, kind: .pong).count > previousPongCount
+        }
     }
 
     private func makeHarness() -> NearbyMatchHarness {
@@ -243,12 +426,17 @@ struct NearbyMatchCoordinatorTests {
                 fileURL: persistenceDirectory.appending(path: "guest.json")
             )
         )
+        let reminders = TurnReminderSpy()
+        host.onLocalTurnStarted = { reminders.hostCount += 1 }
+        guest.onLocalTurnStarted = { reminders.guestCount += 1 }
         return NearbyMatchHarness(
             link: link,
             host: host,
             guest: guest,
             hostModel: hostModel,
-            guestModel: guestModel
+            guestModel: guestModel,
+            reminders: reminders,
+            persistenceDirectory: persistenceDirectory
         )
     }
 
@@ -281,11 +469,20 @@ private struct NearbyMatchHarness {
     let guest: NearbyMatchCoordinator
     let hostModel: MatchViewModel
     let guestModel: MatchViewModel
+    let reminders: TurnReminderSpy
+    let persistenceDirectory: URL
 
     func stop() {
         host.abandonCurrentSession()
         guest.abandonCurrentSession()
+        try? FileManager.default.removeItem(at: persistenceDirectory)
     }
+}
+
+@MainActor
+private final class TurnReminderSpy {
+    var hostCount = 0
+    var guestCount = 0
 }
 
 private enum NearbyMatchTestError: Error {
@@ -302,6 +499,8 @@ private final class FakeNearbyLink {
     private var host: FakeNearbyTransport?
     private var guest: FakeNearbyTransport?
     private(set) var transmissions: [Transmission] = []
+    var heldKind: MatchWireKind?
+    private(set) var heldTransmissions: [Transmission] = []
 
     func makeTransport(role: BLENearbyRole) -> any NearbyTransport {
         let transport = FakeNearbyTransport(role: role, link: self)
@@ -353,8 +552,32 @@ private final class FakeNearbyLink {
             throw NearbyTransportError.notConnected
         }
 
-        transmissions.append(Transmission(sender: sender.role, payload: payload))
-        recipient.emit(.received(payload))
+        let transmission = Transmission(sender: sender.role, payload: payload)
+        transmissions.append(transmission)
+        if let heldKind, try MatchWireCoding.decode(payload).kind == heldKind {
+            heldTransmissions.append(transmission)
+        } else {
+            recipient.emit(.received(payload))
+        }
+    }
+
+    func replay(_ envelope: MatchWireEnvelope, from role: BLENearbyRole) throws {
+        let sender = role == .host ? host : guest
+        guard let sender else { throw NearbyTransportError.notStarted }
+        try send(MatchWireCoding.encode(envelope), from: sender)
+    }
+
+    func deliverHeldTransmissions() throws {
+        let pending = heldTransmissions
+        heldKind = nil
+        heldTransmissions = []
+        for transmission in pending {
+            let recipient = transmission.sender == .host ? guest : host
+            guard let recipient, recipient.isStarted else {
+                throw NearbyTransportError.notConnected
+            }
+            recipient.emit(.received(transmission.payload))
+        }
     }
 
     func envelopes(sentBy sender: BLENearbyRole, kind: MatchWireKind) -> [MatchWireEnvelope] {

@@ -22,9 +22,16 @@ final class AppModel {
     }
     @ObservationIgnored private var startupTask: Task<Void, Never>?
 
-    var screen: Screen = .home
+    var screen: Screen = .home {
+        didSet {
+            if screen != oldValue { feedbackPlayer.stop() }
+        }
+    }
     var setup = MatchSetupDraft()
     let profile: PlayerProfile
+    let feedbackSettings: FeedbackSettings
+    @ObservationIgnored private let feedbackPlayer: any TurnFeedbackPlaying
+    @ObservationIgnored private var isAppActive = false
     @ObservationIgnored private var bypassesNicknameSetup = false
 
     var needsNickname: Bool {
@@ -36,11 +43,15 @@ final class AppModel {
     init(
         persistence: NearbyMatchPersistence = NearbyMatchPersistence(),
         profile: PlayerProfile = PlayerProfile(),
+        feedbackSettings: FeedbackSettings = FeedbackSettings(),
+        feedbackPlayer: any TurnFeedbackPlaying = TurnFeedbackPlayer(),
         transportFactory: @escaping NearbyMatchCoordinator.TransportFactory = {
             BLENearbyTransport(role: $0)
         }
     ) {
         self.profile = profile
+        self.feedbackSettings = feedbackSettings
+        self.feedbackPlayer = feedbackPlayer
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         let showsClaimPreview = arguments.contains("--preview-claim")
@@ -60,6 +71,9 @@ final class AppModel {
         nearby = NearbyMatchCoordinator(
             matchModel: match, transportFactory: transportFactory, persistence: persistence
         )
+        nearby.onLocalTurnStarted = { [weak self] in
+            self?.playTurnReminder()
+        }
         nearby.onMatchReady = { [weak self] in
             self?.screen = .match
         }
@@ -71,6 +85,33 @@ final class AppModel {
             screen = .match
         }
         #endif
+    }
+
+    func setAppActive(_ active: Bool) {
+        isAppActive = active
+        if !active { feedbackPlayer.stop() }
+    }
+
+    /// Called by the settings toggle, not while loading saved preferences.
+    func setHapticsEnabled(_ enabled: Bool) {
+        let wasEnabled = feedbackSettings.hapticsEnabled
+        feedbackSettings.hapticsEnabled = enabled
+        guard enabled else {
+            feedbackPlayer.stop()
+            return
+        }
+        guard !wasEnabled, isAppActive, screen == .settings, !isShowingLaunch else { return }
+        feedbackPlayer.play(soundEnabled: false, hapticsEnabled: true)
+    }
+
+    private func playTurnReminder() {
+        guard isAppActive, screen == .match, !isShowingLaunch,
+              feedbackSettings.soundEnabled || feedbackSettings.hapticsEnabled
+        else { return }
+        feedbackPlayer.play(
+            soundEnabled: feedbackSettings.soundEnabled,
+            hapticsEnabled: feedbackSettings.hapticsEnabled
+        )
     }
 
     /// Shared across view task restarts; restoring once prevents an old save from

@@ -48,6 +48,11 @@ final class NearbyMatchCoordinator {
     @ObservationIgnored
     var onMatchReady: (() -> Void)?
 
+    @ObservationIgnored
+    var onLocalTurnStarted: (() -> Void)?
+
+    private var turnReminderTracker = TurnReminderTracker()
+
     private let matchModel: MatchViewModel
     private let transportFactory: TransportFactory
     private let persistence: NearbyMatchPersistence
@@ -243,6 +248,7 @@ final class NearbyMatchCoordinator {
 
     func abandonCurrentSession() {
         stopTransport()
+        turnReminderTracker.reset()
         game = nil
         latestGuestView = nil
         latestGuestClaimableFlagIndices = []
@@ -293,7 +299,7 @@ final class NearbyMatchCoordinator {
                     )
                 )
                 self.game = game
-                presentHostView()
+                presentHostView(isLive: true)
                 Task { [weak self] in
                     do {
                         try await self?.sendGuestSnapshot()
@@ -352,6 +358,7 @@ final class NearbyMatchCoordinator {
 
     private func resetForNewSession() {
         stopTransport()
+        turnReminderTracker.reset()
         game = nil
         latestGuestView = nil
         latestGuestClaimableFlagIndices = []
@@ -602,6 +609,7 @@ final class NearbyMatchCoordinator {
             )
             guard view.viewer == localSeat else { throw MatchWireError.malformedPayload }
             if let latestGuestView, view.version < latestGuestView.version { return }
+            let isLive = canDeliverLiveTurnReminder
             self.latestGuestView = view
             latestGuestClaimableFlagIndices = snapshot.claimableFlagIndices
             matchModel.update(
@@ -614,6 +622,7 @@ final class NearbyMatchCoordinator {
             stage = .active
             statusMessage = nil
             persistSession()
+            consumeTurnReminder(view, isLive: isLive)
             onMatchReady?()
 
         case .commandRejected:
@@ -662,7 +671,7 @@ final class NearbyMatchCoordinator {
             )
             self.game = game
             processedCommandIDs.insert(payload.commandID)
-            presentHostView()
+            presentHostView(isLive: true)
             Task { [weak self] in
                 do {
                     try await self?.sendGuestSnapshot()
@@ -726,9 +735,10 @@ final class NearbyMatchCoordinator {
         )
     }
 
-    private func presentHostView() {
+    private func presentHostView(isLive: Bool = false) {
         guard let game else { return }
         let view = game.view(for: .playerOne)
+        let allowsReminder = isLive && canDeliverLiveTurnReminder
         matchModel.update(
             from: view,
             claimableFlagIndices: Self.claimableFlagIndices(in: game, for: .playerOne),
@@ -737,6 +747,24 @@ final class NearbyMatchCoordinator {
         )
         matchModel.markConnected()
         persistSession()
+        consumeTurnReminder(view, isLive: allowsReminder)
+    }
+
+    private var canDeliverLiveTurnReminder: Bool {
+        guard stage == .active, !sessionTerminated else { return false }
+        switch matchModel.phase {
+        case .paused, .finished, .waitingForOpponent:
+            return false
+        default:
+            return true
+        }
+    }
+
+    private func consumeTurnReminder(_ view: PlayerView, isLive: Bool) {
+        guard let matchID else { return }
+        if turnReminderTracker.consume(view, matchID: matchID, isLive: isLive) {
+            onLocalTurnStarted?()
+        }
     }
 
     private func sendGuestSnapshot() async throws {
@@ -906,6 +934,9 @@ final class NearbyMatchCoordinator {
                 localName: localPlayerName,
                 opponentName: opponentName
             )
+        }
+        if let restoredView = game?.view(for: .playerOne) ?? latestGuestView {
+            consumeTurnReminder(restoredView, isLive: false)
         }
         matchModel.markPaused("已从本机恢复对局，可继续连接")
     }

@@ -40,6 +40,7 @@ struct MatchView: View {
                             line: line,
                             selectedForPlay: model.selectedLineID == line.id,
                             selectedForClaim: model.selectedClaimIDs.contains(line.id),
+                            highlightedOpponentCardID: highlightedOpponentCardID(for: line),
                             interactive: isLineInteractive(line),
                             select: {
                                 if model.phase == .claiming {
@@ -122,6 +123,26 @@ struct MatchView: View {
             false
         }
     }
+
+    private func highlightedOpponentCardID(for line: BattleLinePresentation) -> String? {
+        guard isShowingPreviousOpponentAction,
+              case let .played(card, lineID)? = model.previousOpponentAction,
+              line.id == lineID
+        else {
+            return nil
+        }
+
+        return card.id
+    }
+
+    private var isShowingPreviousOpponentAction: Bool {
+        switch model.phase {
+        case .claiming, .playCard:
+            true
+        default:
+            false
+        }
+    }
 }
 
 private struct MatchTopBar: View {
@@ -172,13 +193,17 @@ private struct FlagLineView: View {
     let line: BattleLinePresentation
     let selectedForPlay: Bool
     let selectedForClaim: Bool
+    let highlightedOpponentCardID: String?
     let interactive: Bool
     let select: () -> Void
 
     var body: some View {
         Button(action: select) {
             VStack(spacing: 4) {
-                FormationView(cards: line.opponentCards)
+                FormationView(
+                    cards: line.opponentCards,
+                    highlightedCardID: highlightedOpponentCardID
+                )
 
                 HStack(spacing: 5) {
                     Text((line.id + 1).formatted())
@@ -217,11 +242,22 @@ private struct FlagLineView: View {
 
 private struct FormationView: View {
     let cards: [TroopCardPresentation]
+    var highlightedCardID: String? = nil
 
     var body: some View {
         HStack(spacing: 3) {
             ForEach(cards) { card in
                 TroopCardView(card: card, compact: true)
+                    .overlay {
+                        if highlightedCardID == card.id {
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .stroke(BattleLineTheme.gold.opacity(0.9), lineWidth: 2)
+                                .padding(-2)
+                                .shadow(color: BattleLineTheme.gold.opacity(0.38), radius: 4)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                    }
             }
             ForEach(cards.count ..< 3, id: \.self) { _ in
                 EmptyTroopSlotView()
@@ -357,6 +393,12 @@ private struct MatchCommandView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            if isShowingPreviousOpponentAction,
+               let previousOpponentAction = model.previousOpponentAction
+            {
+                previousOpponentActionView(previousOpponentAction)
+            }
+
             Spacer(minLength: 0)
 
             if case .finished = model.phase {
@@ -473,6 +515,63 @@ private struct MatchCommandView: View {
                 ProgressView()
                     .controlSize(.small)
             }
+        }
+    }
+
+    private func previousOpponentActionView(
+        _ action: PreviousOpponentActionPresentation
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("对手上一手")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(BattleLineTheme.mutedInk)
+
+            switch action {
+            case let .played(card, lineID):
+                HStack(spacing: 8) {
+                    TroopCardView(card: card, compact: true)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(card.color.localizedName) \(card.value)")
+                            .font(.subheadline.weight(.semibold))
+                        Text("战线 \(lineID + 1)")
+                            .font(.caption)
+                            .foregroundStyle(BattleLineTheme.mutedInk)
+                    }
+                }
+            case .passed:
+                Text("上一回合对方跳过出牌")
+                    .font(.caption)
+                    .foregroundStyle(BattleLineTheme.mutedInk)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(BattleLineTheme.raisedSurface, in: BattleLineTheme.controlShape)
+        .accessibilityElement(children: .ignore)
+        .accessibilityIdentifier("match.previousOpponentAction")
+        .accessibilityLabel("对手上一手")
+        .accessibilityValue(previousOpponentActionAccessibilityValue(action))
+    }
+
+    private func previousOpponentActionAccessibilityValue(
+        _ action: PreviousOpponentActionPresentation
+    ) -> String {
+        switch action {
+        case let .played(card, lineID):
+            "\(card.color.localizedName) \(card.value)，战线 \(lineID + 1)"
+        case .passed:
+            "上一回合对方跳过出牌"
+        }
+    }
+
+    private var isShowingPreviousOpponentAction: Bool {
+        switch model.phase {
+        case .claiming, .playCard:
+            true
+        default:
+            false
         }
     }
 

@@ -153,6 +153,8 @@ struct NearbyMatchCoordinatorTests {
         #expect(!activeModel.hand.contains(playedCard))
         #expect(activeModel.phase == .claiming)
         #expect(observingModel.phase == .waitingForOpponentTurn)
+        #expect(activeModel.previousOpponentAction == nil)
+        #expect(observingModel.previousOpponentAction == nil)
         #expect(harness.hostModel.deckCount == 46)
         #expect(harness.guestModel.deckCount == 46)
 
@@ -185,6 +187,18 @@ struct NearbyMatchCoordinatorTests {
         #expect(harness.reminders.hostCount == 1)
         #expect(harness.reminders.guestCount == 1)
 
+        // State snapshots are guest-scoped. Make the guest the active viewer so
+        // replay checks preserve a concrete opponent action instead of nil.
+        if harness.guestModel.phase == .waitingForOpponentTurn {
+            try await completeTurn(in: harness)
+        }
+        let guestPreviousAction = try #require(
+            harness.guestModel.previousOpponentAction
+        )
+        #expect(harness.hostModel.previousOpponentAction == nil)
+        let hostReminderCount = harness.reminders.hostCount
+        let guestReminderCount = harness.reminders.guestCount
+
         let guestCommand = try #require(
             harness.link.envelopes(sentBy: .join, kind: .actionCommand).last
         )
@@ -197,8 +211,10 @@ struct NearbyMatchCoordinatorTests {
                 > snapshotsBeforeReplay
         }
         try await waitForDelivery(from: .host, in: harness)
-        #expect(harness.reminders.hostCount == 1)
-        #expect(harness.reminders.guestCount == 1)
+        #expect(harness.guestModel.previousOpponentAction == guestPreviousAction)
+        #expect(harness.hostModel.previousOpponentAction == nil)
+        #expect(harness.reminders.hostCount == hostReminderCount)
+        #expect(harness.reminders.guestCount == guestReminderCount)
 
         let snapshots = harness.link.envelopes(sentBy: .host, kind: .stateSnapshot)
         let initialSnapshot = try #require(snapshots.first)
@@ -210,8 +226,10 @@ struct NearbyMatchCoordinatorTests {
         try await waitForDelivery(from: .host, in: harness)
 
         #expect(harness.guestModel.stateVersion == currentVersion)
-        #expect(harness.reminders.hostCount == 1)
-        #expect(harness.reminders.guestCount == 1)
+        #expect(harness.guestModel.previousOpponentAction == guestPreviousAction)
+        #expect(harness.hostModel.previousOpponentAction == nil)
+        #expect(harness.reminders.hostCount == hostReminderCount)
+        #expect(harness.reminders.guestCount == guestReminderCount)
     }
 
     @Test("A turn-ending message delivered after resignation does not remind either peer",
@@ -272,6 +290,9 @@ struct NearbyMatchCoordinatorTests {
         let hostHand = harness.hostModel.hand
         let guestHand = harness.guestModel.hand
         let version = harness.hostModel.stateVersion
+        let hostPreviousAction = harness.hostModel.previousOpponentAction
+        let guestPreviousAction = harness.guestModel.previousOpponentAction
+        #expect((hostPreviousAction == nil) != (guestPreviousAction == nil))
         let snapshotsBefore = harness.link.envelopes(sentBy: .host, kind: .stateSnapshot).count
 
         if leaving != "guest" { harness.host.pauseAndReturnHome() }
@@ -297,6 +318,8 @@ struct NearbyMatchCoordinatorTests {
         #expect(harness.guestModel.hand == guestHand)
         #expect(harness.hostModel.stateVersion == version)
         #expect(harness.guestModel.stateVersion == version)
+        #expect(harness.hostModel.previousOpponentAction == hostPreviousAction)
+        #expect(harness.guestModel.previousOpponentAction == guestPreviousAction)
         #expect(harness.reminders.hostCount == hostReminderCount)
         #expect(harness.reminders.guestCount == guestReminderCount)
 
@@ -347,7 +370,7 @@ struct NearbyMatchCoordinatorTests {
             #expect(harness.reminders.guestCount == previousGuestCount)
         }
 
-        try await playCard(using: activeModel, in: harness)
+        let playedMove = try await playCard(using: activeModel, in: harness)
         if activeModel.phase == .claiming {
             // A standard-rule play is incomplete until the claim window closes.
             #expect(observingModel.phase == .waitingForOpponentTurn)
@@ -361,21 +384,28 @@ struct NearbyMatchCoordinatorTests {
         #expect(observingModel.phase == .playCard || observingModel.phase == .claiming)
         #expect(activeModel.turn == previousTurn + 1)
         #expect(observingModel.turn == previousTurn + 1)
+        #expect(activeModel.previousOpponentAction == nil)
+        #expect(
+            observingModel.previousOpponentAction
+                == .played(card: playedMove.card, lineID: playedMove.lineID)
+        )
         #expect(harness.reminders.hostCount == previousHostCount
             + (observingModel === harness.hostModel ? 1 : 0))
         #expect(harness.reminders.guestCount == previousGuestCount
             + (observingModel === harness.guestModel ? 1 : 0))
     }
 
+    @discardableResult
     private func playCard(
         using model: MatchViewModel,
         in harness: NearbyMatchHarness
-    ) async throws {
+    ) async throws -> (card: TroopCardPresentation, lineID: Int) {
         let card = try #require(model.hand.first)
         let line = try #require(model.lines.first { $0.owner == nil && $0.playerCards.count < 3 })
         model.selectCard(card)
         model.selectLine(line)
         try await applyAndSynchronize(in: harness) { model.confirmPlay() }
+        return (card, line.id)
     }
 
     private func applyAndSynchronize(

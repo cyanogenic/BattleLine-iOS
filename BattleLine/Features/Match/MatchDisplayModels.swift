@@ -24,6 +24,11 @@ enum MatchPhasePresentation: Equatable, Sendable {
     case finished(winner: FlagOwnerPresentation)
 }
 
+enum PreviousOpponentActionPresentation: Equatable, Sendable {
+    case played(card: TroopCardPresentation, lineID: Int)
+    case passed
+}
+
 @MainActor
 @Observable
 final class MatchViewModel {
@@ -43,6 +48,7 @@ final class MatchViewModel {
     var opponentHandCount = 7
     var turn: UInt64 = 1
     var stateVersion: UInt64 = 0
+    var previousOpponentAction: PreviousOpponentActionPresentation?
     var notice: String?
     var isSubmitting = false
 
@@ -100,6 +106,7 @@ final class MatchViewModel {
         opponentHandCount = view.opponent.handCount
         turn = view.turn
         stateVersion = view.version
+        previousOpponentAction = Self.previousOpponentAction(from: view)
         lines = view.flags.map { flag in
             let owner: FlagOwnerPresentation?
             switch flag.claimedBy {
@@ -230,6 +237,7 @@ final class MatchViewModel {
         opponentHandCount = 7
         turn = 1
         stateVersion = 0
+        previousOpponentAction = nil
         notice = nil
         isSubmitting = false
     }
@@ -251,9 +259,11 @@ final class MatchViewModel {
         model.lines = (0 ..< 9).map { index in
             BattleLinePresentation(
                 id: index,
-                opponentCards: index.isMultiple(of: 2)
-                    ? [TroopCardPresentation(color: .orange, value: min(index + 2, 10))]
-                    : [],
+                opponentCards: index == 4
+                    ? [TroopCardPresentation(color: .orange, value: 9)]
+                    : index.isMultiple(of: 2)
+                        ? [TroopCardPresentation(color: .orange, value: min(index + 2, 10))]
+                        : [],
                 playerCards: index.isMultiple(of: 3)
                     ? [TroopCardPresentation(color: .blue, value: min(index + 3, 10))]
                     : [],
@@ -271,9 +281,42 @@ final class MatchViewModel {
             TroopCardPresentation(color: .red, value: 10),
         ]
         model.phase = .playCard
+        model.turn = 2
         model.connectionText = "纯蓝牙已连接"
         model.opponentName = "对手"
+        model.previousOpponentAction = .played(
+            card: TroopCardPresentation(color: .orange, value: 9),
+            lineID: 4
+        )
         return model
+    }
+
+    static func previousOpponentAction(
+        from view: PlayerView
+    ) -> PreviousOpponentActionPresentation? {
+        guard view.winner == nil,
+              view.phase != .gameOver,
+              view.currentPlayer == view.viewer,
+              view.turn > 1
+        else { return nil }
+
+        let previousTurn = view.turn - 1
+        for entry in view.log.reversed()
+        where entry.turn == previousTurn && entry.actor == view.viewer.opponent {
+
+            switch entry.action {
+            case let .play(card, flag):
+                return .played(
+                    card: TroopCardPresentation(card),
+                    lineID: flag.rawValue
+                )
+            case .pass:
+                return .passed
+            case .declareClaims:
+                continue
+            }
+        }
+        return nil
     }
 }
 
